@@ -1,0 +1,250 @@
+# Import necessary libraries
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+import tkinter as tk
+from tkinter import ttk
+from tkinter import messagebox
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_pdf import PdfPages
+import logging
+import os
+
+# Configure logging to capture errors
+logging.basicConfig(filename="error_log.txt", level=logging.ERROR)
+
+# ------------------ Load Data ------------------
+def load_data(path):
+    """
+    Load data from CSV file and handle exceptions.
+    """
+    try:
+        df = pd.read_csv(path)  # Read the dataset
+        return df
+    except FileNotFoundError as e:
+        logging.error(e)  # Log the error
+        messagebox.showerror("Error", "File not found! Check the path.")  # Show error message to the user
+        exit()
+    except pd.errors.EmptyDataError as e:
+        logging.error(e)
+        messagebox.showerror("Error", "The file is empty.")  # Handle empty data file
+        exit()
+    except pd.errors.ParserError as e:
+        logging.error(e)
+        messagebox.showerror("Error", "Invalid file format.")  # Handle invalid file format
+        exit()
+
+# ------------------ Preprocess Data ------------------
+def preprocess_data(df):
+    """
+    Preprocess the data by mapping categorical values and filling missing values.
+    """
+    # Mapping 'Yes' to 1 and 'No' to 0 for 'Default' column
+    df['Default'] = df['Default'].map({'Yes': 1, 'No': 0})
+    
+    # Mapping 'Male' to 0 and 'Female' to 1 for 'Gender' column
+    if 'Gender' in df.columns:
+        df['Gender'] = df['Gender'].map({'Male': 0, 'Female': 1})
+    
+    # Encoding 'Education' column as categorical values
+    if 'Education' in df.columns:
+        df['Education'] = df['Education'].astype('category').cat.codes
+
+    # Fill missing values in numerical columns with median
+    df.fillna(df.select_dtypes(include=[np.number]).median(), inplace=True)
+    return df
+
+# ------------------ Create Graphs ------------------
+def create_graphs(df):
+    """
+    Generate different plots and graphs for data analysis.
+    """
+    sns.set(style='whitegrid')  # Set Seaborn style
+    graphs = []  # List to store the generated graphs
+
+    # 1. Income vs Loan Amount - Scatter plot
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.scatterplot(x=df['Income'], y=df['Loan_Amount'], hue=df['Default'], alpha=0.6, ax=ax)
+    ax.set_title('Income vs Loan Amount')  # Set title
+    graphs.append(fig)
+
+    # 2. Credit Score Distribution - Histogram with KDE
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.histplot(df['Credit_Score'], bins=30, kde=True, ax=ax)
+    ax.set_title('Credit Score Distribution')
+    graphs.append(fig)
+
+    # 3. Loan Amount vs Default Status - Boxplot
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.boxplot(x=df['Default'], y=df['Loan_Amount'], ax=ax)
+    ax.set_title('Loan Amount vs Default Status')
+    graphs.append(fig)
+
+    # 4. Age Distribution of Defaults - Histogram
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.histplot(df[df['Default'] == 0]['Age'], bins=30, color='green', label='No Default', kde=True, ax=ax)
+    sns.histplot(df[df['Default'] == 1]['Age'], bins=30, color='red', label='Default', kde=True, ax=ax)
+    ax.legend()
+    ax.set_title('Age Distribution of Loan Defaults')
+    graphs.append(fig)
+
+    # 5. Loan Default by Gender - Count plot
+    fig, ax = plt.subplots(figsize=(6, 4))
+    sns.countplot(x='Gender', hue='Default', data=df, ax=ax)
+    ax.set_title('Loan Default by Gender')
+    graphs.append(fig)
+
+    # 6. Correlation Heatmap - Heatmap for correlations
+    fig, ax = plt.subplots(figsize=(8, 6))
+    corr_matrix = df.select_dtypes(include=[np.number]).corr()  # Compute correlation matrix
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt='.2f', ax=ax)  # Plot heatmap
+    ax.set_title('Correlation Heatmap')
+    graphs.append(fig)
+
+    return graphs  # Return the list of generated graphs
+
+# ------------------ GUI Functions ------------------
+def show_graph(index):
+    """
+    Display the selected graph from the cache.
+    """
+    global graph_canvas
+    graph_canvas.get_tk_widget().destroy()  # Destroy previous graph
+    fig = graph_cache[index]  # Get the new figure
+    graph_canvas = FigureCanvasTkAgg(fig, master=frame)  # Create canvas for new figure
+    graph_canvas.draw()  # Draw the new graph
+    graph_canvas.get_tk_widget().pack()  # Pack the new graph into the frame
+    stats_label.config(text=f"Default Rate: {df['Default'].mean() * 100:.2f}%")  # Update stats label
+
+def next_graph():
+    """
+    Show the next graph in the list.
+    """
+    global graph_index
+    if graph_index < len(graph_cache) - 1:
+        graph_index += 1
+        show_graph(graph_index)
+        graph_dropdown.current(graph_index)
+
+def prev_graph():
+    """
+    Show the previous graph in the list.
+    """
+    global graph_index
+    if graph_index > 0:
+        graph_index -= 1
+        show_graph(graph_index)
+        graph_dropdown.current(graph_index)
+
+def update_graph(event):
+    """
+    Update the graph based on the dropdown selection.
+    """
+    selected_index = graph_dropdown.current()
+    global graph_index
+    graph_index = selected_index
+    show_graph(graph_index)
+
+def save_graph():
+    """
+    Save the current graph as an image.
+    """
+    fig = graph_cache[graph_index]  # Get the current graph
+    try:
+        os.makedirs("saved_graphs", exist_ok=True)  # Create directory if not exists
+        save_path = os.path.join("saved_graphs", f"{graph_titles[graph_index]}.png")
+        fig.savefig(save_path, dpi=300)  # Save the graph as PNG
+        messagebox.showinfo("Success", f"Graph saved to:\n{save_path}")  # Show success message
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to save graph:\n{str(e)}")  # Show error if save fails
+
+def export_to_pdf():
+    """
+    Export all graphs to a single PDF file.
+    """
+    pdf_path = r"C:\Users\HP\Desktop\Loan Data Analysis & Visualization\Loan_Analysis_Report.pdf"
+    try:
+        os.makedirs(os.path.dirname(pdf_path), exist_ok=True)  # Create directory if not exists
+        with PdfPages(pdf_path) as pdf:
+            for fig in graph_cache:
+                pdf.savefig(fig)  # Save each figure to the PDF
+        messagebox.showinfo("Success", f"Graphs exported to:\n{pdf_path}")  # Show success message
+    except PermissionError:
+        messagebox.showerror("Permission Error", "Please close the PDF if it's already open or check folder permissions.")
+    except Exception as e:
+        messagebox.showerror("Error", f"Failed to save PDF:\n{str(e)}")  # Show error if export fails
+
+def close_app():
+    """
+    Close the application.
+    """
+    root.destroy()
+
+# ------------------ Main ------------------
+file_path = r"C:\Users\HP\Downloads\loan-data-analysis-main\loan-data-analysis-main\loan_dataset_5000.csv"
+df = load_data(file_path)  # Load the dataset
+df = preprocess_data(df)  # Preprocess the dataset
+graph_cache = create_graphs(df)  # Generate graphs
+graph_titles = [
+    "Income_vs_Loan_Amount",
+    "Credit_Score_Distribution",
+    "Loan_Amount_vs_Default",
+    "Age_Distribution_of_Defaults",
+    "Loan_Default_by_Gender",
+    "Correlation_Heatmap"
+]
+graph_index = 0  # Initialize the graph index
+
+# ------------------ GUI Setup ------------------
+root = tk.Tk()
+root.title("Borrow Trends Analysis")  # Set window title
+root.geometry("900x750")  # Set window size
+
+title_label = ttk.Label(root, text="Borrow Trends Analysis Project", font=("Arial", 20))
+title_label.pack(pady=10)  # Pack title label
+
+frame = ttk.Frame(root)
+frame.pack(pady=10)  # Pack frame for graphs
+
+# Initial Graph
+graph_canvas = FigureCanvasTkAgg(graph_cache[graph_index], master=frame)
+graph_canvas.draw()  # Draw the initial graph
+graph_canvas.get_tk_widget().pack()  # Pack the canvas into the window
+
+# Dropdown Label + Dropdown for selecting graphs
+ttk.Label(root, text="Select Graph:", font=("Arial", 12)).pack()
+graph_dropdown = ttk.Combobox(root, values=[
+    "Income vs Loan Amount",
+    "Credit Score Distribution",
+    "Loan Amount vs Default",
+    "Age Distribution of Loan Defaults",
+    "Loan Default by Gender",
+    "Correlation Heatmap"
+])
+graph_dropdown.current(0)  # Set default selection
+graph_dropdown.pack(pady=5)  # Pack the dropdown
+graph_dropdown.bind("<<ComboboxSelected>>", update_graph)  # Bind event for selection change
+
+# Stats Label to show default rate
+stats_label = ttk.Label(root, text="", font=("Arial", 12))
+stats_label.pack(pady=5)
+
+# Buttons for navigation and actions
+btn_frame = ttk.Frame(root)
+btn_frame.pack(pady=10)
+
+ttk.Button(btn_frame, text="Previous", command=prev_graph).grid(row=0, column=0, padx=10)
+ttk.Button(btn_frame, text="Next", command=next_graph).grid(row=0, column=1, padx=10)
+ttk.Button(btn_frame, text="Save Graph", command=save_graph).grid(row=0, column=2, padx=10)
+ttk.Button(btn_frame, text="Export to PDF", command=export_to_pdf).grid(row=0, column=3, padx=10)
+
+ttk.Button(root, text="Close", command=close_app).pack(pady=10)
+
+root.mainloop()  # Start the GUI event loop
+
+# Save processed data to a new CSV file
+try:
+    df.to_csv("processed_loan_data.csv", index=False)
+except Exception as e:
+    logging.error(f"Failed to save processed data: {str(e)}")  # Log any error that occurs
